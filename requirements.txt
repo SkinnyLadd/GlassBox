@@ -1,1 +1,6 @@
 pefile
+pandas
+xgboost
+shap
+streamlit
+scikit-learn
