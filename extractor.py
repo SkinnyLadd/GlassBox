@@ -152,6 +152,8 @@ def extract_features(file_path):
     except:
         data_dict['fileinfo'] = 0
 
+    pe.close()
+
     # --- FINAL STEP: ORDERING ---
     # We must return a LIST in the exact order of features.json
     final_vector = []
