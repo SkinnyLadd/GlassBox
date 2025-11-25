@@ -3,166 +3,189 @@ import math
 import struct
 import sys
 import os
+import datetime
+
+# The EXACT feature order expected by the model (from features.json)
+MODEL_FEATURES = [
+    "e_cblp", "e_cp", "e_cparhdr", "e_maxalloc", "e_sp", "e_lfanew", "NumberOfSections", "CreationYear",
+    "FH_char0", "FH_char1", "FH_char2", "FH_char3", "FH_char4", "FH_char5", "FH_char6", "FH_char7",
+    "FH_char8", "FH_char9", "FH_char10", "FH_char11", "FH_char12", "FH_char13", "FH_char14",
+    "MajorLinkerVersion", "MinorLinkerVersion", "SizeOfCode", "SizeOfInitializedData",
+    "SizeOfUninitializedData", "AddressOfEntryPoint", "BaseOfCode", "BaseOfData", "ImageBase",
+    "SectionAlignment", "FileAlignment", "MajorOperatingSystemVersion", "MinorOperatingSystemVersion",
+    "MajorImageVersion", "MinorImageVersion", "MajorSubsystemVersion", "MinorSubsystemVersion",
+    "SizeOfImage", "SizeOfHeaders", "CheckSum", "Subsystem",
+    "OH_DLLchar0", "OH_DLLchar1", "OH_DLLchar2", "OH_DLLchar3", "OH_DLLchar4", "OH_DLLchar5",
+    "OH_DLLchar6", "OH_DLLchar7", "OH_DLLchar8", "OH_DLLchar9", "OH_DLLchar10",
+    "SizeOfStackReserve", "SizeOfStackCommit", "SizeOfHeapReserve", "SizeOfHeapCommit", "LoaderFlags",
+    "sus_sections", "non_sus_sections", "packer", "E_text", "E_data", "filesize", "E_file", "fileinfo"
+]
 
 
 def get_entropy(data):
-    """
-    Calculates the entropy (randomness) of a chunk of data.
-    Returns a float between 0.0 (all zeros) and 8.0 (total chaos).
-    """
-    if not data:
-        return 0.0
-
-    # counting how many times each byte appears in the data
+    """Calculates entropy (0-8)"""
+    if not data: return 0.0
     occurrences = {}
-    for byte in data:
-        occurrences[byte] = occurrences.get(byte, 0) + 1
-
-    # calculating the math formula for entropy (Shannon Entropy)
+    for byte in data: occurrences[byte] = occurrences.get(byte, 0) + 1
     entropy = 0
-    total_len = len(data)
     for byte in occurrences:
-        p_x = float(occurrences[byte]) / total_len
+        p_x = float(occurrences[byte]) / len(data)
         entropy -= p_x * math.log(p_x, 2)
-
     return entropy
 
 
 def extract_features(file_path):
-    """
-    Extracts the specific raw + derived features used in ClaMP.
-    Returns a DICTIONARY of features ready for the AI model.
-    """
-    features = {}
+    data_dict = {}
 
-    # checking if file exists before we crash everything
     if not os.path.exists(file_path):
-        print(f"Error: File {file_path} not found.")
         return None
 
     try:
-        # loading the PE file using the library
         pe = pefile.PE(file_path)
-    except Exception as e:
-        print(f"Error parsing file {file_path}: {e}")
+    except Exception:
         return None
 
-    # --- 1. DOS HEADER (The old school header) ---
-    # grabbing these weirdly named fields that viruses often mess up
-    features['e_magic'] = pe.DOS_HEADER.e_magic
-    features['e_cblp'] = pe.DOS_HEADER.e_cblp
-    features['e_cp'] = pe.DOS_HEADER.e_cp
-    features['e_crlc'] = pe.DOS_HEADER.e_crlc
-    features['e_cparhdr'] = pe.DOS_HEADER.e_cparhdr
-    features['e_minalloc'] = pe.DOS_HEADER.e_minalloc
-    features['e_maxalloc'] = pe.DOS_HEADER.e_maxalloc
-    features['e_ss'] = pe.DOS_HEADER.e_ss
-    features['e_sp'] = pe.DOS_HEADER.e_sp
-    features['e_csum'] = pe.DOS_HEADER.e_csum
-    features['e_ip'] = pe.DOS_HEADER.e_ip
-    features['e_cs'] = pe.DOS_HEADER.e_cs
-    features['e_lfarlc'] = pe.DOS_HEADER.e_lfarlc
-    features['e_ovno'] = pe.DOS_HEADER.e_ovno
-    features['e_res'] = 0  # usually reserved so we just putting 0
-    features['e_oemid'] = pe.DOS_HEADER.e_oemid
-    features['e_oeminfo'] = pe.DOS_HEADER.e_oeminfo
-    features['e_res2'] = 0
-    features['e_lfanew'] = pe.DOS_HEADER.e_lfanew
+    # --- 1. Standard Headers ---
+    data_dict['e_cblp'] = pe.DOS_HEADER.e_cblp
+    data_dict['e_cp'] = pe.DOS_HEADER.e_ccp if hasattr(pe.DOS_HEADER, 'e_ccp') else pe.DOS_HEADER.e_cp
+    data_dict['e_cparhdr'] = pe.DOS_HEADER.e_cparhdr
+    data_dict['e_maxalloc'] = pe.DOS_HEADER.e_maxalloc
+    data_dict['e_sp'] = pe.DOS_HEADER.e_sp
+    data_dict['e_lfanew'] = pe.DOS_HEADER.e_lfanew
+    data_dict['NumberOfSections'] = pe.FILE_HEADER.NumberOfSections
 
-    # --- 2. FILE HEADER (General info) ---
-    features['Machine'] = pe.FILE_HEADER.Machine
-    features['NumberOfSections'] = pe.FILE_HEADER.NumberOfSections
-    features['CreationYear'] = 0  # ignoring this cause it's not in the raw header
-    features['PointerToSymbolTable'] = pe.FILE_HEADER.PointerToSymbolTable
-    features['NumberOfSymbols'] = pe.FILE_HEADER.NumberOfSymbols
-    features['SizeOfOptionalHeader'] = pe.FILE_HEADER.SizeOfOptionalHeader
-    features['Characteristics'] = pe.FILE_HEADER.Characteristics
-
-    # --- 3. OPTIONAL HEADER (The juicy stuff) ---
-    # using a try block cause some old files might miss these
+    # Convert TimeDateStamp to Year
     try:
-        opt = pe.OPTIONAL_HEADER
-        features['Magic'] = opt.Magic
-        features['MajorLinkerVersion'] = opt.MajorLinkerVersion
-        features['MinorLinkerVersion'] = opt.MinorLinkerVersion
-        features['SizeOfCode'] = opt.SizeOfCode
-        features['SizeOfInitializedData'] = opt.SizeOfInitializedData
-        features['SizeOfUninitializedData'] = opt.SizeOfUninitializedData
-        features['AddressOfEntryPoint'] = opt.AddressOfEntryPoint
-        features['BaseOfCode'] = opt.BaseOfCode
-
-        # handling 32-bit vs 64-bit difference for BaseOfData
-        try:
-            features['BaseOfData'] = opt.BaseOfData
-        except AttributeError:
-            features['BaseOfData'] = 0
-
-        features['ImageBase'] = opt.ImageBase
-        features['SectionAlignment'] = opt.SectionAlignment
-        features['FileAlignment'] = opt.FileAlignment
-        features['MajorOperatingSystemVersion'] = opt.MajorOperatingSystemVersion
-        features['MinorOperatingSystemVersion'] = opt.MinorOperatingSystemVersion
-        features['MajorImageVersion'] = opt.MajorImageVersion
-        features['MinorImageVersion'] = opt.MinorImageVersion
-        features['MajorSubsystemVersion'] = opt.MajorSubsystemVersion
-        features['MinorSubsystemVersion'] = opt.MinorSubsystemVersion
-        features['SizeOfImage'] = opt.SizeOfImage
-        features['SizeOfHeaders'] = opt.SizeOfHeaders
-        features['CheckSum'] = opt.CheckSum
-        features['Subsystem'] = opt.Subsystem
-        features['DllCharacteristics'] = opt.DllCharacteristics
-        features['SizeOfStackReserve'] = opt.SizeOfStackReserve
-        features['SizeOfStackCommit'] = opt.SizeOfStackCommit
-        features['SizeOfHeapReserve'] = opt.SizeOfHeapReserve
-        features['SizeOfHeapCommit'] = opt.SizeOfHeapCommit
-        features['LoaderFlags'] = opt.LoaderFlags
-        features['NumberOfRvaAndSizes'] = opt.NumberOfRvaAndSizes
-    except Exception as e:
-        print(f"Warning: Optional Header issue: {e}")
-
-    # --- 4. DERIVED FEATURES (The 'Special Sauce') ---
-    # calculating the entropy of the whole file to spot packed malware
-    try:
-        # reading the raw bytes from disk
-        with open(file_path, 'rb') as f:
-            data = f.read()
-            features['Entropy'] = get_entropy(data)
+        data_dict['CreationYear'] = datetime.datetime.fromtimestamp(pe.FILE_HEADER.TimeDateStamp).year
     except:
-        features['Entropy'] = 0
+        data_dict['CreationYear'] = 0
 
-    # counting how many DLLs the file imports
-    # normal files import many (kernel32, user32), malware often imports few
+    # --- 2. BIT MASKING: File Header Characteristics (FH_char) ---
+    # We split the integer into 15 bits (0 or 1)
+    characteristics = pe.FILE_HEADER.Characteristics
+    for i in range(15):
+        # Check if the i-th bit is set
+        data_dict[f'FH_char{i}'] = 1 if (characteristics & (1 << i)) else 0
+
+    # --- 3. Optional Header Standard Fields ---
+    opt = pe.OPTIONAL_HEADER
+    data_dict['MajorLinkerVersion'] = opt.MajorLinkerVersion
+    data_dict['MinorLinkerVersion'] = opt.MinorLinkerVersion
+    data_dict['SizeOfCode'] = opt.SizeOfCode
+    data_dict['SizeOfInitializedData'] = opt.SizeOfInitializedData
+    data_dict['SizeOfUninitializedData'] = opt.SizeOfUninitializedData
+    data_dict['AddressOfEntryPoint'] = opt.AddressOfEntryPoint
+    data_dict['BaseOfCode'] = opt.BaseOfCode
     try:
-        features['ImportedDlls'] = len(pe.DIRECTORY_ENTRY_IMPORT)
-    except AttributeError:
-        features['ImportedDlls'] = 0
+        data_dict['BaseOfData'] = opt.BaseOfData
+    except:
+        data_dict['BaseOfData'] = 0
+    data_dict['ImageBase'] = opt.ImageBase
+    data_dict['SectionAlignment'] = opt.SectionAlignment
+    data_dict['FileAlignment'] = opt.FileAlignment
+    data_dict['MajorOperatingSystemVersion'] = opt.MajorOperatingSystemVersion
+    data_dict['MinorOperatingSystemVersion'] = opt.MinorOperatingSystemVersion
+    data_dict['MajorImageVersion'] = opt.MajorImageVersion
+    data_dict['MinorImageVersion'] = opt.MinorImageVersion
+    data_dict['MajorSubsystemVersion'] = opt.MajorSubsystemVersion
+    data_dict['MinorSubsystemVersion'] = opt.MinorSubsystemVersion
+    data_dict['SizeOfImage'] = opt.SizeOfImage
+    data_dict['SizeOfHeaders'] = opt.SizeOfHeaders
+    data_dict['CheckSum'] = opt.CheckSum
+    data_dict['Subsystem'] = opt.Subsystem
 
-    # finding the most chaotic section (often where the virus hides)
-    max_entropy = 0
+    # --- 4. BIT MASKING: DLL Characteristics (OH_DLLchar) ---
+    dll_chars = opt.DllCharacteristics
+    for i in range(11):
+        data_dict[f'OH_DLLchar{i}'] = 1 if (dll_chars & (1 << i)) else 0
+
+    data_dict['SizeOfStackReserve'] = opt.SizeOfStackReserve
+    data_dict['SizeOfStackCommit'] = opt.SizeOfStackCommit
+    data_dict['SizeOfHeapReserve'] = opt.SizeOfHeapReserve
+    data_dict['SizeOfHeapCommit'] = opt.SizeOfHeapCommit
+    data_dict['LoaderFlags'] = opt.LoaderFlags
+
+    # --- 5. DERIVED / CALCULATED FEATURES ---
+
+    # Section Analysis
+    sus_sections = 0
+    non_sus_sections = 0
+    standard_names = ['.text', '.data', '.rdata', '.idata', '.edata', '.rsrc', '.reloc', '.pdata']
+
+    e_text = 0.0
+    e_data = 0.0
+
     for section in pe.sections:
-        ent = section.get_entropy()
-        if ent > max_entropy:
-            max_entropy = ent
-    features['MaxSectionEntropy'] = max_entropy
+        name = section.Name.decode('utf-8', errors='ignore').strip('\x00').lower()
+        if name in standard_names:
+            non_sus_sections += 1
+        else:
+            sus_sections += 1
 
-    return features
+        # Capture entropy of specific sections
+        if name == '.text':
+            e_text = get_entropy(section.get_data())
+        elif name == '.data':
+            e_data = get_entropy(section.get_data())
+
+    data_dict['sus_sections'] = sus_sections
+    data_dict['non_sus_sections'] = non_sus_sections
+    data_dict['E_text'] = e_text
+    data_dict['E_data'] = e_data
+
+    # File Size & Total Entropy
+    with open(file_path, 'rb') as f:
+        raw_data = f.read()
+        data_dict['filesize'] = len(raw_data)
+        data_dict['E_file'] = get_entropy(raw_data)
+
+    # Packer Detection (Simple heuristic: High entropy + Non-standard sections)
+    # If entropy > 7.0 and we have suspicious sections, assume packed.
+    if data_dict['E_file'] > 7.0 and sus_sections > 0:
+        data_dict['packer'] = 1
+    else:
+        data_dict['packer'] = 0
+
+    # File Info (Count of version info keys)
+    try:
+        data_dict['fileinfo'] = len(pe.FileInfo)
+    except:
+        data_dict['fileinfo'] = 0
+
+    # --- FINAL STEP: ORDERING ---
+    # We must return a LIST in the exact order of features.json
+    final_vector = []
+    for feature in MODEL_FEATURES:
+        final_vector.append(data_dict.get(feature, 0))  # Default to 0 if missing
+
+    return final_vector
 
 
 # --- TEST BLOCK ---
-# running this directly to see if it works
 if __name__ == "__main__":
-    # check if user gave a file path
+    # If user provides a file, use it. Otherwise, default to Notepad.
     if len(sys.argv) > 1:
         target_file = sys.argv[1]
-        print(f"Scanning: {target_file} ...")
-        res = extract_features(target_file)
-
-        if res:
-            print("\n--- EXTRACTED FEATURES ---")
-            # printing just a few important ones to verify
-            print(f"Entropy: {res.get('Entropy', 0):.4f}")
-            print(f"Imported DLLs: {res.get('ImportedDlls', 0)}")
-            print(f"Max Section Entropy: {res.get('MaxSectionEntropy', 0):.4f}")
-            print(f"Total Features Extracted: {len(res)}")
     else:
-        print("Usage: python extractor.py path_to_file.exe")
+        # Default test target (safe system file)
+        target_file = r"C:\Windows\System32\notepad.exe"
+
+    print(f"--------------------------------------------------")
+    print(f"🔎 Scanning Target: {target_file}")
+
+    # Run the extraction
+    res = extract_features(target_file)
+
+    if res:
+        print(f"✅ Extraction Successful!")
+        print(f"📊 Features Extracted: {len(res)}")
+        print(f"🎯 Expected Count:     {len(MODEL_FEATURES)}")
+
+        if len(res) == len(MODEL_FEATURES):
+            print("\n>> INTEGRATION PASSED: Feature vector matches model input perfectly.")
+        else:
+            print("\n>> CRITICAL ERROR: Feature count mismatch!")
+    else:
+        print("❌ Error: Could not extract features.")
+        print("   Make sure the file exists and is a valid Windows .exe (PE) file.")
+    print(f"--------------------------------------------------")
