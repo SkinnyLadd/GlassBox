@@ -5,62 +5,125 @@ import json
 import os
 import shap
 import matplotlib.pyplot as plt
+import numpy as np
+import re
+import requests
+import hashlib
 
 from extractor import extract_features
+
+# --- CONFIGURATION ---
+VT_API_KEY = "fe62a39bb172f6a5554da434b689cbd672f6a795ab8abcf56d940e7eacfdfc7e"
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="GlassBox AI Antivirus", page_icon="🛡️", layout="wide")
 
 
-# --- 1. THE LOGIC BRAIN (Contextual Interpretations) ---
-def interpret_feature(feature_name, value, impact_score):
-    """
-    Returns a human-readable string explaining WHY the value is Good or Bad.
-    """
-    # Is this feature pushing towards Malware (Risk) or Safe (Blue)?
-    is_risk = impact_score > 0
+# --- HELPER FUNCTIONS ---
 
-    # --- LOGIC FOR ENTROPY (E_file, E_text, E_data) ---
+def interpret_feature(feature_name, value, impact_score):
+    """Returns human-readable explanation for specific feature values."""
+    is_risk = impact_score > 0
     if "E_" in feature_name or "Entropy" in feature_name:
         if value > 7.0 and is_risk:
-            return "This section is extremely random (Entropy > 7.0). This usually means the code is 'Packed' (encrypted) to hide a virus."
+            return "High Entropy (>7.0). Indicates compressed or encrypted code (Packing)."
         elif value < 6.0 and not is_risk:
-            return "The entropy is low/normal, which looks like standard, unhidden computer code."
-
-    # --- LOGIC FOR FILE SIZE ---
+            return "Normal Entropy. Consistent with standard, unhidden code."
     if feature_name == "filesize":
-        if value < 20000 and is_risk:  # Less than 20KB
-            return "The file is suspiciously small. Many malware 'stagers' are tiny scripts."
-        elif value > 1000000 and not is_risk:  # Greater than 1MB
-            return "The file is large. Most malware tries to be small. Large installers are often legitimate."
-
-    # --- LOGIC FOR CHECKSUM ---
+        if value < 20000 and is_risk:
+            return "Suspiciously small file size (<20KB)."
+        elif value > 1000000 and not is_risk:
+            return "Large file size (>1MB). Malware is usually smaller."
     if feature_name == "CheckSum":
         if value == 0 and is_risk:
-            return "The Checksum is 0. Professional software usually fills this field; 0 implies a lazy/malicious compilation."
+            return "Zero Checksum. Often implies lazy/malicious compilation."
         elif value > 0 and not is_risk:
-            return "A valid, non-zero checksum is present, suggesting the file header was generated correctly."
-
-    # --- LOGIC FOR DLL CHARACTERISTICS (OH_DLLchar) ---
-    if "OH_DLLchar" in feature_name:
-        if value == 1 and not is_risk:
-            return "This security flag (e.g., ASLR/DEP) is ON, which is standard for modern safe software."
-        elif value == 0 and is_risk:
-            return "This modern security flag is MISSING, which makes the file look old or suspicious."
-
-    # --- LOGIC FOR SECTIONS ---
-    if feature_name == "sus_sections":
-        if value > 0 and is_risk:
-            return f"Found {int(value)} non-standard section(s). Malware often creates weirdly named sections (e.g., '.upx') to hide."
-
-    # --- GENERIC FALLBACK ---
-    if is_risk:
-        return f"The value '{value:.4f}' is common in Malware, but rare in Safe files."
-    else:
-        return f"The value '{value:.4f}' is typical for benign, safe software."
+            return "Valid Checksum present."
+    if is_risk: return "Value is statistically associated with Malware."
+    return "Value is statistically associated with Safe software."
 
 
-# --- 2. LOAD RESOURCES ---
+def analyze_strings(file_path, min_length=4):
+    """
+    Extracts ASCII strings and filters them for 'Indicators of Compromise' (IOCs).
+    Returns: (list of all strings, dict of flagged artifacts)
+    """
+    with open(file_path, 'rb') as f:
+        data = f.read()
+
+    # 1. Extract all printable strings
+    chars = re.findall(b'[ -~]{4,}', data)
+    all_strings = [c.decode('utf-8') for c in chars]
+
+    # 2. Filter for specific IOCs using Regex
+    flagged = {
+        "IP Addresses": [],
+        "URLs": [],
+        "Suspicious Keywords": [],
+        "Registry/File Paths": []
+    }
+
+    # Regex Patterns
+    ip_pattern = re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
+    url_pattern = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
+    sus_keywords = ["cmd.exe", "powershell", "wscript", "cscript", "system32", "tor", "bitcoin", "wallet", "keylog"]
+    path_pattern = re.compile(r'[C-Z]:\\[a-zA-Z0-9_\\]+|HKEY_')
+
+    for s in all_strings:
+        if ip_pattern.search(s):
+            flagged["IP Addresses"].append(s)
+        if url_pattern.search(s):
+            flagged["URLs"].append(s)
+        if path_pattern.search(s):
+            flagged["Registry/File Paths"].append(s)
+        # Check keywords (case insensitive)
+        for kw in sus_keywords:
+            if kw in s.lower():
+                flagged["Suspicious Keywords"].append(s)
+
+    return all_strings, flagged
+
+
+def plot_entropy_bitmap(file_path):
+    """Visualizes the file as a 2D square image."""
+    with open(file_path, 'rb') as f:
+        byte_data = list(f.read())
+
+    file_size = len(byte_data)
+    width = int(np.ceil(np.sqrt(file_size)))
+    padding = (width * width) - file_size
+    byte_data += [0] * padding
+    img_data = np.reshape(byte_data, (width, width))
+
+    fig, ax = plt.subplots(figsize=(4, 4))
+    ax.imshow(img_data, cmap='inferno', interpolation='nearest')
+    ax.axis('off')
+    return fig
+
+
+def check_virustotal(file_path, api_key):
+    """Checks the file hash against VirusTotal DB."""
+    if not api_key: return None
+    hash_md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    file_hash = hash_md5.hexdigest()
+
+    url = f"https://www.virustotal.com/api/v3/files/{file_hash}"
+    headers = {"x-apikey": api_key}
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()['data']['attributes']['last_analysis_stats']
+        elif response.status_code == 404:
+            return "Not Found"
+    except:
+        return None
+    return None
+
+
+# --- LOAD RESOURCES ---
 @st.cache_resource
 def load_system():
     model = joblib.load("model/model.pkl")
@@ -75,87 +138,105 @@ except Exception as e:
     st.error(f"❌ System Error: {e}")
     st.stop()
 
-# --- 3. UI HEADER ---
-st.title("🛡️ GlassBox Malware Detector")
-st.markdown("### Explainable AI (XAI) Security Engine")
+# --- MAIN APP LAYOUT ---
+st.title("🛡️ GlassBox Malware Detector v2.1")
+st.markdown("### Explainable AI & Forensic Analysis Engine")
 
-# --- 4. MAIN APP ---
-uploaded_file = st.file_uploader("Upload a PE file (.exe, .dll)", type=["exe", "dll"])
+uploaded_file = st.file_uploader("Upload PE File (.exe)", type=["exe", "dll"])
 
-if uploaded_file is not None:
+if uploaded_file:
     temp_filename = "temp_scan_file.exe"
     with open(temp_filename, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    with st.spinner("Analyzing Headers..."):
-        # A. EXTRACT
+    with st.spinner("⚡ Running Deep Scan (Static + Heuristic + Visual)..."):
+        # 1. CORE AI SCAN
         feature_vector = extract_features(temp_filename)
 
-        # B. PREDICT
         if feature_vector:
             df = pd.DataFrame([feature_vector], columns=feature_names)
             prediction = model.predict(df)[0]
-            probability = model.predict_proba(df)[0][1]  # Risk Score
+            probability = model.predict_proba(df)[0][1]
 
-            os.remove(temp_filename)
+            # 2. RUN EXTRA FORENSICS
+            all_strings, flagged_artifacts = analyze_strings(temp_filename)
+            vt_stats = check_virustotal(temp_filename, VT_API_KEY)
 
-            # --- C. DASHBOARD ---
+            # --- DASHBOARD ---
             st.divider()
 
-            # 1. VERDICT
-            col1, col2 = st.columns([1, 2])
-
-            with col1:
-                st.subheader("Verdict")
+            # A. VERDICT BANNER
+            col_v1, col_v2 = st.columns([2, 1])
+            with col_v1:
                 if prediction == 1:
-                    st.error("🚨 MALICIOUS")
-                    st.metric("Confidence", f"{probability * 100:.2f}%")
+                    st.error("🚨 VERDICT: MALICIOUS")
+                    conf_text = f"{probability * 100:.2f}% Confidence"
                 else:
-                    st.success("✅ BENIGN")
-                    st.metric("Safety Score", f"{(1 - probability) * 100:.2f}%")
+                    st.success("✅ VERDICT: BENIGN")
+                    conf_text = f"{(1 - probability) * 100:.2f}% Safety Score"
+                st.markdown(f"**AI Confidence:** {conf_text}")
 
-            with col2:
-                # 2. WATERFALL PLOT
-                st.subheader("Decision Path")
+            with col_v2:
+                if vt_stats == "Not Found":
+                    st.warning("⚠️ Unknown to VirusTotal")
+                elif isinstance(vt_stats, dict):
+                    mal_count = vt_stats['malicious']
+                    if mal_count > 0:
+                        st.metric("VirusTotal", f"{mal_count} Flags", "Malicious", delta_color="inverse")
+                    else:
+                        st.metric("VirusTotal", "Clean", "Verified")
+
+            # B. TABBED ANALYSIS
+            tab1, tab2, tab3 = st.tabs(["🔬 AI Explainability", "🖼️ Visual Forensics", "🕵️ String Heuristics"])
+
+            with tab1:
+                st.subheader("Why did the AI make this decision?")
                 explainer = shap.TreeExplainer(model)
                 shap_values = explainer(df)
-
                 fig, ax = plt.subplots(figsize=(8, 3))
                 shap.plots.waterfall(shap_values[0], max_display=7, show=False)
                 st.pyplot(fig, clear_figure=True)
 
-            # 3. INTERPRETATION TABLE (THE NEW LOGIC)
-            st.divider()
-            st.subheader("🔍 Deep Dive Analysis")
-            st.caption("Contextual reasoning behind the top factors.")
+                st.markdown("**Top Influential Factors:**")
+                feature_importance = pd.DataFrame(
+                    {'Feature': feature_names, 'Value': df.values[0], 'Impact': shap_values[0].values})
+                feature_importance['AbsImpact'] = feature_importance['Impact'].abs()
+                top_features = feature_importance.sort_values(by='AbsImpact', ascending=False).head(4)
 
-            # Get data
-            feature_importance = pd.DataFrame({
-                'Feature': feature_names,
-                'Value': df.values[0],
-                'Impact': shap_values[0].values
-            })
-            feature_importance['AbsImpact'] = feature_importance['Impact'].abs()
-            top_features = feature_importance.sort_values(by='AbsImpact', ascending=False).head(5)
+                for _, row in top_features.iterrows():
+                    msg = interpret_feature(row['Feature'], row['Value'], row['Impact'])
+                    icon = "🔴" if row['Impact'] > 0 else "🔵"
+                    st.markdown(f"{icon} **{row['Feature']}**: {msg}")
 
-            for index, row in top_features.iterrows():
-                fname = row['Feature']
-                val = row['Value']
-                impact = row['Impact']
+            with tab2:
+                col_img, col_desc = st.columns([1, 2])
+                with col_img:
+                    st.markdown("**Entropy Bitmap**")
+                    fig_bm = plot_entropy_bitmap(temp_filename)
+                    st.pyplot(fig_bm)
+                with col_desc:
+                    st.info(
+                        "Uniform/Dark Noise = Packed/Encrypted (Potential Malware)\nStructured Patterns = Normal Code")
 
-                # Get the Dynamic Interpretation
-                context_msg = interpret_feature(fname, val, impact)
+            with tab3:
+                st.subheader("Indicators of Compromise (IOCs)")
+                st.caption("Auto-extracted suspicious artifacts from the binary.")
 
-                # Visuals
-                color = "🔴" if impact > 0 else "🔵"
-                status = "Risk Factor" if impact > 0 else "Safety Factor"
+                # Dynamic Warning display for IOCs
+                ioc_found = False
+                for category, items in flagged_artifacts.items():
+                    if items:
+                        ioc_found = True
+                        with st.expander(f"🚩 Found {len(items)} {category}", expanded=True):
+                            for item in items[:10]:  # Limit to top 10 per category
+                                st.code(item)
 
-                with st.expander(f"{color} {fname} ({status})"):
-                    col_a, col_b = st.columns([1, 3])
-                    with col_a:
-                        st.metric("Value", f"{val:.4f}")
-                    with col_b:
-                        st.markdown(f"**Reasoning:** {context_msg}")
+                if not ioc_found:
+                    st.success("✅ No obvious IOCs (IPs, URLs, Scripts) found in string analysis.")
 
+                with st.expander("View All Raw Strings"):
+                    st.text_area("Full Dump", "\n".join(all_strings[:500]), height=200)
+
+            os.remove(temp_filename)
         else:
-            st.error("❌ Failed to parse file.")
+            st.error("Failed to parse file.")
