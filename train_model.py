@@ -54,7 +54,7 @@ def train_model(csv_path="data/ClaMP_Integrated-5184.csv"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train XGBoost malware classifier")
-    parser.add_argument("--dataset", type=str, default="data/ClaMP_Integrated-5184.csv",
+    parser.add_argument("--dataset", type=str, default="data/ClaMP_Smart-5184.csv",
                         help="Path to dataset CSV file")
     args = parser.parse_args()
 
