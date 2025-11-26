@@ -156,7 +156,13 @@ if uploaded_file:
         if feature_vector:
             df = pd.DataFrame([feature_vector], columns=feature_names)
             prediction = model.predict(df)[0]
-            probability = model.predict_proba(df)[0][1]
+            probability = model.predict_proba(df)[0][1] # defaults to 50%
+
+            # Set threshold to 35% instead of 50%
+            if probability > 0.35:
+                prediction = 1
+            else:
+                prediction = 0
 
             # 2. RUN EXTRA FORENSICS
             all_strings, flagged_artifacts = analyze_strings(temp_filename)
