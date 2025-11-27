@@ -7,72 +7,19 @@ import datetime
 
 # The EXACT feature order expected by the model (Matched to Member 1's new training)
 MODEL_FEATURES = [
-    "e_cblp",
-    "e_cp",
-    "e_cparhdr",
-    "e_maxalloc",
-    "e_sp",
-    "e_lfanew",
-    "NumberOfSections",
-    "CreationYear",
-    "FH_char0",
-    "FH_char1",
-    "FH_char2",
-    "FH_char3",
-    "FH_char4",
-    "FH_char5",
-    "FH_char6",
-    "FH_char7",
-    "FH_char8",
-    "FH_char9",
-    "FH_char10",
-    "FH_char11",
-    "FH_char12",
-    "FH_char13",
-    "FH_char14",
-    "MajorLinkerVersion",
-    "MinorLinkerVersion",
-    "AddressOfEntryPoint",
-    "BaseOfCode",
-    "BaseOfData",
-    "ImageBase",
-    "SectionAlignment",
-    "FileAlignment",
-    "MajorOperatingSystemVersion",
-    "MinorOperatingSystemVersion",
-    "MajorImageVersion",
-    "MinorImageVersion",
-    "MajorSubsystemVersion",
-    "MinorSubsystemVersion",
-    "SizeOfHeaders",
-    "CheckSum",
-    "Subsystem",
-    "OH_DLLchar0",
-    "OH_DLLchar1",
-    "OH_DLLchar2",
-    "OH_DLLchar3",
-    "OH_DLLchar4",
-    "OH_DLLchar5",
-    "OH_DLLchar6",
-    "OH_DLLchar7",
-    "OH_DLLchar8",
-    "OH_DLLchar9",
-    "OH_DLLchar10",
-    "SizeOfStackReserve",
-    "SizeOfStackCommit",
-    "SizeOfHeapReserve",
-    "SizeOfHeapCommit",
-    "LoaderFlags",
-    "sus_sections",
-    "non_sus_sections",
-    "packer",
-    "E_text",
-    "E_data",
-    "E_file",
-    "fileinfo",
-    "CompressionRatio",
-    "CodeDensity",
-    "DataDensity"
+  "e_cblp", "e_cp", "e_cparhdr", "e_maxalloc", "e_sp", "e_lfanew", "NumberOfSections", "CreationYear",
+  "FH_char0", "FH_char1", "FH_char2", "FH_char3", "FH_char4", "FH_char5", "FH_char6", "FH_char7",
+  "FH_char8", "FH_char9", "FH_char10", "FH_char11", "FH_char12", "FH_char13", "FH_char14",
+  "MajorLinkerVersion", "MinorLinkerVersion", "AddressOfEntryPoint", "BaseOfCode", "BaseOfData",
+  "ImageBase", "SectionAlignment", "FileAlignment", "MajorOperatingSystemVersion",
+  "MinorOperatingSystemVersion", "MajorImageVersion", "MinorImageVersion", "MajorSubsystemVersion",
+  "MinorSubsystemVersion", "SizeOfHeaders", "CheckSum", "Subsystem", "OH_DLLchar0", "OH_DLLchar1",
+  "OH_DLLchar2", "OH_DLLchar3", "OH_DLLchar4", "OH_DLLchar5", "OH_DLLchar6", "OH_DLLchar7",
+  "OH_DLLchar8", "OH_DLLchar9", "OH_DLLchar10", "SizeOfStackReserve", "SizeOfStackCommit",
+  "SizeOfHeapReserve", "SizeOfHeapCommit", "LoaderFlags", "sus_sections", "non_sus_sections",
+  "packer", "E_text", "E_data", "E_file", "fileinfo",
+  "CompressionRatio",
+  "CodeDensity"
 ]
 
 
@@ -201,9 +148,6 @@ def extract_features(file_path):
 
     # B. Code Density (Code / Raw) - High means pure code (malware-like)
     data_dict['CodeDensity'] = size_of_code / raw_size
-
-    # C. Data Density (Initialized Data / Raw)
-    data_dict['DataDensity'] = size_of_init_data / raw_size
 
     # Packer Detection
     if data_dict['E_file'] > 7.0 and sus_sections > 0:
