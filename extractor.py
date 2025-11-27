@@ -5,20 +5,21 @@ import sys
 import os
 import datetime
 
-# The EXACT feature order expected by the model (from features.json)
+# The EXACT feature order expected by the model (Matched to Member 1's new training)
 MODEL_FEATURES = [
-    "e_cblp", "e_cp", "e_cparhdr", "e_maxalloc", "e_sp", "e_lfanew", "NumberOfSections", "CreationYear",
-    "FH_char0", "FH_char1", "FH_char2", "FH_char3", "FH_char4", "FH_char5", "FH_char6", "FH_char7",
-    "FH_char8", "FH_char9", "FH_char10", "FH_char11", "FH_char12", "FH_char13", "FH_char14",
-    "MajorLinkerVersion", "MinorLinkerVersion", "SizeOfCode", "SizeOfInitializedData",
-    "SizeOfUninitializedData", "AddressOfEntryPoint", "BaseOfCode", "BaseOfData", "ImageBase",
-    "SectionAlignment", "FileAlignment", "MajorOperatingSystemVersion", "MinorOperatingSystemVersion",
-    "MajorImageVersion", "MinorImageVersion", "MajorSubsystemVersion", "MinorSubsystemVersion",
-    "SizeOfImage", "SizeOfHeaders", "CheckSum", "Subsystem",
-    "OH_DLLchar0", "OH_DLLchar1", "OH_DLLchar2", "OH_DLLchar3", "OH_DLLchar4", "OH_DLLchar5",
-    "OH_DLLchar6", "OH_DLLchar7", "OH_DLLchar8", "OH_DLLchar9", "OH_DLLchar10",
-    "SizeOfStackReserve", "SizeOfStackCommit", "SizeOfHeapReserve", "SizeOfHeapCommit", "LoaderFlags",
-    "sus_sections", "non_sus_sections", "packer", "E_text", "E_data", "filesize", "E_file", "fileinfo"
+  "e_cblp", "e_cp", "e_cparhdr", "e_maxalloc", "e_sp", "e_lfanew", "NumberOfSections", "CreationYear",
+  "FH_char0", "FH_char1", "FH_char2", "FH_char3", "FH_char4", "FH_char5", "FH_char6", "FH_char7",
+  "FH_char8", "FH_char9", "FH_char10", "FH_char11", "FH_char12", "FH_char13", "FH_char14",
+  "MajorLinkerVersion", "MinorLinkerVersion", "AddressOfEntryPoint", "BaseOfCode", "BaseOfData",
+  "ImageBase", "SectionAlignment", "FileAlignment", "MajorOperatingSystemVersion",
+  "MinorOperatingSystemVersion", "MajorImageVersion", "MinorImageVersion", "MajorSubsystemVersion",
+  "MinorSubsystemVersion", "SizeOfHeaders", "CheckSum", "Subsystem", "OH_DLLchar0", "OH_DLLchar1",
+  "OH_DLLchar2", "OH_DLLchar3", "OH_DLLchar4", "OH_DLLchar5", "OH_DLLchar6", "OH_DLLchar7",
+  "OH_DLLchar8", "OH_DLLchar9", "OH_DLLchar10", "SizeOfStackReserve", "SizeOfStackCommit",
+  "SizeOfHeapReserve", "SizeOfHeapCommit", "LoaderFlags", "sus_sections", "non_sus_sections",
+  "packer", "E_text", "E_data", "E_file", "fileinfo",
+  "CompressionRatio",
+  "CodeDensity"
 ]
 
 
@@ -54,26 +55,27 @@ def extract_features(file_path):
     data_dict['e_lfanew'] = pe.DOS_HEADER.e_lfanew
     data_dict['NumberOfSections'] = pe.FILE_HEADER.NumberOfSections
 
-    # Convert TimeDateStamp to Year
     try:
         data_dict['CreationYear'] = datetime.datetime.fromtimestamp(pe.FILE_HEADER.TimeDateStamp).year
     except:
         data_dict['CreationYear'] = 0
 
-    # --- 2. BIT MASKING: File Header Characteristics (FH_char) ---
-    # We split the integer into 15 bits (0 or 1)
+    # --- 2. BIT MASKING ---
     characteristics = pe.FILE_HEADER.Characteristics
     for i in range(15):
-        # Check if the i-th bit is set
         data_dict[f'FH_char{i}'] = 1 if (characteristics & (1 << i)) else 0
 
-    # --- 3. Optional Header Standard Fields ---
+    # --- 3. Optional Header ---
     opt = pe.OPTIONAL_HEADER
     data_dict['MajorLinkerVersion'] = opt.MajorLinkerVersion
     data_dict['MinorLinkerVersion'] = opt.MinorLinkerVersion
-    data_dict['SizeOfCode'] = opt.SizeOfCode
-    data_dict['SizeOfInitializedData'] = opt.SizeOfInitializedData
-    data_dict['SizeOfUninitializedData'] = opt.SizeOfUninitializedData
+
+    # NOTE: We grab these sizes for Ratio calculation later, but we DON'T save them to the dict
+    # because the model stopped using raw sizes to avoid bias.
+    size_of_code = opt.SizeOfCode
+    size_of_init_data = opt.SizeOfInitializedData
+    virt_size = opt.SizeOfImage
+
     data_dict['AddressOfEntryPoint'] = opt.AddressOfEntryPoint
     data_dict['BaseOfCode'] = opt.BaseOfCode
     try:
@@ -89,12 +91,11 @@ def extract_features(file_path):
     data_dict['MinorImageVersion'] = opt.MinorImageVersion
     data_dict['MajorSubsystemVersion'] = opt.MajorSubsystemVersion
     data_dict['MinorSubsystemVersion'] = opt.MinorSubsystemVersion
-    data_dict['SizeOfImage'] = opt.SizeOfImage
     data_dict['SizeOfHeaders'] = opt.SizeOfHeaders
     data_dict['CheckSum'] = opt.CheckSum
     data_dict['Subsystem'] = opt.Subsystem
 
-    # --- 4. BIT MASKING: DLL Characteristics (OH_DLLchar) ---
+    # --- 4. DLL Characteristics ---
     dll_chars = opt.DllCharacteristics
     for i in range(11):
         data_dict[f'OH_DLLchar{i}'] = 1 if (dll_chars & (1 << i)) else 0
@@ -105,13 +106,10 @@ def extract_features(file_path):
     data_dict['SizeOfHeapCommit'] = opt.SizeOfHeapCommit
     data_dict['LoaderFlags'] = opt.LoaderFlags
 
-    # --- 5. DERIVED / CALCULATED FEATURES ---
-
-    # Section Analysis
+    # --- 5. DERIVED FEATURES ---
     sus_sections = 0
     non_sus_sections = 0
     standard_names = ['.text', '.data', '.rdata', '.idata', '.edata', '.rsrc', '.reloc', '.pdata']
-
     e_text = 0.0
     e_data = 0.0
 
@@ -121,8 +119,6 @@ def extract_features(file_path):
             non_sus_sections += 1
         else:
             sus_sections += 1
-
-        # Capture entropy of specific sections
         if name == '.text':
             e_text = get_entropy(section.get_data())
         elif name == '.data':
@@ -133,20 +129,32 @@ def extract_features(file_path):
     data_dict['E_text'] = e_text
     data_dict['E_data'] = e_data
 
-    # File Size & Total Entropy
-    with open(file_path, 'rb') as f:
-        raw_data = f.read()
-        data_dict['filesize'] = len(raw_data)
-        data_dict['E_file'] = get_entropy(raw_data)
+    # File Size & Entropy
+    raw_size = 0
+    try:
+        with open(file_path, 'rb') as f:
+            raw_data = f.read()
+            raw_size = len(raw_data)
+            data_dict['E_file'] = get_entropy(raw_data)
+    except:
+        data_dict['E_file'] = 0
 
-    # Packer Detection (Simple heuristic: High entropy + Non-standard sections)
-    # If entropy > 7.0 and we have suspicious sections, assume packed.
+    # --- 6. SMART RATIOS (Replaces Raw Sizes) ---
+    # Avoid division by zero
+    if raw_size == 0: raw_size = 1
+
+    # A. Compression Ratio (Virtual / Raw) - High means packed
+    data_dict['CompressionRatio'] = virt_size / raw_size
+
+    # B. Code Density (Code / Raw) - High means pure code (malware-like)
+    data_dict['CodeDensity'] = size_of_code / raw_size
+
+    # Packer Detection
     if data_dict['E_file'] > 7.0 and sus_sections > 0:
         data_dict['packer'] = 1
     else:
         data_dict['packer'] = 0
 
-    # File Info (Count of version info keys)
     try:
         data_dict['fileinfo'] = len(pe.FileInfo)
     except:
@@ -155,27 +163,20 @@ def extract_features(file_path):
     pe.close()
 
     # --- FINAL STEP: ORDERING ---
-    # We must return a LIST in the exact order of features.json
     final_vector = []
     for feature in MODEL_FEATURES:
-        final_vector.append(data_dict.get(feature, 0))  # Default to 0 if missing
+        final_vector.append(data_dict.get(feature, 0))
 
     return final_vector
 
 
-# --- TEST BLOCK ---
 if __name__ == "__main__":
-    # If user provides a file, use it. Otherwise, default to Notepad.
     if len(sys.argv) > 1:
         target_file = sys.argv[1]
     else:
-        # Default test target (safe system file)
         target_file = r"C:\Windows\System32\notepad.exe"
 
-    print(f"--------------------------------------------------")
-    print(f"🔎 Scanning Target: {target_file}")
-
-    # Run the extraction
+    print(f"Scanning: {target_file}")
     res = extract_features(target_file)
 
     if res:
@@ -184,10 +185,6 @@ if __name__ == "__main__":
         print(f"🎯 Expected Count:     {len(MODEL_FEATURES)}")
 
         if len(res) == len(MODEL_FEATURES):
-            print("\n>> INTEGRATION PASSED: Feature vector matches model input perfectly.")
+            print(">> INTEGRATION PASSED: Vector matches new Smart Model structure.")
         else:
-            print("\n>> CRITICAL ERROR: Feature count mismatch!")
-    else:
-        print("❌ Error: Could not extract features.")
-        print("   Make sure the file exists and is a valid Windows .exe (PE) file.")
-    print(f"--------------------------------------------------")
+            print(">> CRITICAL ERROR: Feature count mismatch!")

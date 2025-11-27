@@ -156,36 +156,92 @@ if uploaded_file:
         if feature_vector:
             df = pd.DataFrame([feature_vector], columns=feature_names)
             prediction = model.predict(df)[0]
-            probability = model.predict_proba(df)[0][1]
+            probability = model.predict_proba(df)[0][1] # defaults to 50%
+
+            # Set threshold to 35% instead of 50%
+            if probability > 0.35:
+                prediction = 1
+            else:
+                prediction = 0
 
             # 2. RUN EXTRA FORENSICS
             all_strings, flagged_artifacts = analyze_strings(temp_filename)
             vt_stats = check_virustotal(temp_filename, VT_API_KEY)
 
+            # --- HYBRID DECISION LOGIC ---
+            # 1. Default to AI Opinion
+            final_verdict = prediction
+            final_probability = probability
+            verdict_text = "MALICIOUS"
+            verdict_color = "error"  # Red
+
+            # 2. Check VirusTotal (The Veto Power)
+            vt_score = 0
+            if isinstance(vt_stats, dict):
+                vt_score = vt_stats.get('malicious', 0)
+
+            # SCENARIO A: AI says Malware, but VirusTotal says Clean (False Positive)
+            if prediction == 1 and vt_score == 0:
+                final_verdict = 0  # Override to Safe
+                verdict_text = "BENIGN (Verified by Threat Intel)"
+                verdict_color = "success"  # Green
+                st.toast("🛡️ AI False Positive detected. Overridden by VirusTotal.", icon="✅")
+
+            # SCENARIO B: AI says Safe, but VirusTotal says Malware (False Negative)
+            if prediction == 0 and vt_score >= 3:
+                final_verdict = 1  # Override to Malware
+                verdict_text = "MALICIOUS (Flagged by Threat Intel)"
+                verdict_color = "error"
+                st.toast("⚠️ AI False Negative detected. Overridden by VirusTotal.", icon="🚨")
+
+            # --- DASHBOARD UI ---
+            st.divider()
+
             # --- DASHBOARD ---
             st.divider()
 
-            # A. VERDICT BANNER
+            # A. VERDICT BANNER (Logic Upgrade)
             col_v1, col_v2 = st.columns([2, 1])
+
+            # 1. Calculate VirusTotal Score
+            vt_score = 0
+            if isinstance(vt_stats, dict):
+                vt_score = vt_stats.get('malicious', 0)
+
             with col_v1:
-                if prediction == 1:
+                # --- SCENARIO 1: FALSE POSITIVE (Yellow) ---
+                # AI says Malware (1), but VirusTotal says Clean (0)
+                if prediction == 1 and vt_score == 0:
+                    st.warning("⚠️ VERDICT: SUSPICIOUS (Likely False Positive)")
+                    st.markdown(f"**AI Confidence:** {probability * 100:.2f}% (High Risk Structure)")
+                    st.caption(
+                        "Result: The AI detected suspicious anomalies (e.g., Packing), but VirusTotal reports the file is clean. This is likely a False Positive due to the file's structure.")
+
+                # --- SCENARIO 2: MALWARE (Red) ---
+                # AI says Malware OR VirusTotal says Malware (>2 flags)
+                elif prediction == 1 or vt_score > 2:
                     st.error("🚨 VERDICT: MALICIOUS")
-                    conf_text = f"{probability * 100:.2f}% Confidence"
+                    if prediction == 1:
+                        st.markdown(f"**AI Confidence:** {probability * 100:.2f}%")
+                    else:
+                        st.markdown(f"**AI Confidence:** {(1 - probability) * 100:.2f}% (Overridden by VT)")
+
+                # --- SCENARIO 3: SAFE (Green) ---
                 else:
                     st.success("✅ VERDICT: BENIGN")
-                    conf_text = f"{(1 - probability) * 100:.2f}% Safety Score"
-                st.markdown(f"**AI Confidence:** {conf_text}")
+                    st.markdown(f"**AI Safety Score:** {(1 - probability) * 100:.2f}%")
 
             with col_v2:
+                # VirusTotal Badge (Kept the same)
                 if vt_stats == "Not Found":
                     st.warning("⚠️ Unknown to VirusTotal")
                 elif isinstance(vt_stats, dict):
-                    mal_count = vt_stats['malicious']
-                    if mal_count > 0:
-                        st.metric("VirusTotal", f"{mal_count} Flags", "Malicious", delta_color="inverse")
+                    if vt_score > 0:
+                        st.metric("VirusTotal", f"{vt_score} Flags", "Malicious", delta_color="inverse")
                     else:
                         st.metric("VirusTotal", "Clean", "Verified")
-
+                else:
+                    st.caption("VirusTotal: Skipped")
             # B. TABBED ANALYSIS
             tab1, tab2, tab3 = st.tabs(["🔬 AI Explainability", "🖼️ Visual Forensics", "🕵️ String Heuristics"])
 
