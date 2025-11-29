@@ -41,7 +41,7 @@ class AntivirusApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.grid_rowconfigure(0, weight=1)
 
         # --- DATA & VARIABLES ---
-        self.history_file = "history.json"
+        self.history_file = "output/history.json"
         self.scan_history = self.load_history()
         self.switch_var = ctk.StringVar(value="Dark")
         self.selected_path = None
@@ -234,7 +234,7 @@ class AntivirusApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
             plt.figure(figsize=(10, 4))
             shap.plots.waterfall(shap_values[0], max_display=8, show=False)
-            plt.savefig("graph_result.png", bbox_inches='tight', dpi=100)
+            plt.savefig("output/graph_result.png", bbox_inches='tight', dpi=100)
             plt.close()
 
         except Exception as e:
@@ -334,7 +334,7 @@ class AntivirusApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         # SHOW SHAP GRAPH
         try:
-            pil_img = Image.open("graph_result.png")
+            pil_img = Image.open("output/graph_result.png")
             # Resize for UI
             w, h = pil_img.size
             aspect = w / h
